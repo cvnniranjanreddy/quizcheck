@@ -14,7 +14,7 @@
 // You should have received a copy of the GNU General Public License
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
-/**print_quiz_list
+/**
  * Defines the renderer for the quiz module.
  *
  * @package   mod_quiz
@@ -79,9 +79,9 @@ class mod_quiz_renderer extends plugin_renderer_base {
         $output .= $this->review_summary_table($summarydata, 0);
 
         if (!is_null($seq)) {
-            $output .= $attemptobj->render_question_at_step($slot, $seq, true);
+            $output .= $attemptobj->render_question_at_step($slot, $seq, true, $this);
         } else {
-            $output .= $attemptobj->render_question($slot, true);
+            $output .= $attemptobj->render_question($slot, true, $this);
         }
 
         $output .= $this->close_window_button();
@@ -182,7 +182,7 @@ class mod_quiz_renderer extends plugin_renderer_base {
                               mod_quiz_display_options $displayoptions) {
         $output = '';
         foreach ($slots as $slot) {
-            $output .= $attemptobj->render_question($slot, $reviewing,
+            $output .= $attemptobj->render_question($slot, $reviewing, $this,
                     $attemptobj->review_url($slot, $page, $showall));
         }
         return $output;
@@ -313,7 +313,7 @@ class mod_quiz_renderer extends plugin_renderer_base {
         $output .= $panel->render_before_button_bits($this);
 
         $bcc = $panel->get_button_container_class();
-        $output .= html_writer::start_tag('div', array('class' => "qn_buttons $bcc"));
+        $output .= html_writer::start_tag('div', array('class' => "qn_buttons clearfix $bcc"));
         foreach ($panel->get_question_buttons() as $button) {
             $output .= $this->render($button);
         }
@@ -329,9 +329,10 @@ class mod_quiz_renderer extends plugin_renderer_base {
     }
 
     /**
-     * Returns the quizzes navigation button
+     * Display a quiz navigation button.
      *
      * @param quiz_nav_question_button $button
+     * @return string HTML fragment.
      */
     protected function render_quiz_nav_question_button(quiz_nav_question_button $button) {
         $classes = array('qnbutton', $button->stateclass, $button->navmethod);
@@ -374,6 +375,16 @@ class mod_quiz_renderer extends plugin_renderer_base {
     }
 
     /**
+     * Display a quiz navigation heading.
+     *
+     * @param quiz_nav_section_heading $heading the heading.
+     * @return string HTML fragment.
+     */
+    protected function render_quiz_nav_section_heading(quiz_nav_section_heading $heading) {
+        return $this->heading($heading->heading, 3, 'mod_quiz-section-heading');
+    }
+
+    /**
      * outputs the link the other attempts.
      *
      * @param mod_quiz_links_to_other_attempts $links
@@ -382,10 +393,12 @@ class mod_quiz_renderer extends plugin_renderer_base {
             mod_quiz_links_to_other_attempts $links) {
         $attemptlinks = array();
         foreach ($links->links as $attempt => $url) {
-            if ($url) {
-                $attemptlinks[] = html_writer::link($url, $attempt);
-            } else {
+            if (!$url) {
                 $attemptlinks[] = html_writer::tag('strong', $attempt);
+            } else if ($url instanceof renderable) {
+                $attemptlinks[] = $this->render($url);
+            } else {
+                $attemptlinks[] = html_writer::link($url, $attempt);
             }
         }
         return implode(', ', $attemptlinks);
@@ -459,8 +472,8 @@ class mod_quiz_renderer extends plugin_renderer_base {
 
         // Print all the questions.
         foreach ($slots as $slot) {
-            $output .= $attemptobj->render_question($slot, false,
-                    $attemptobj->attempt_url($slot, $page));
+            $output .= $attemptobj->render_question($slot, false, $this,
+                    $attemptobj->attempt_url($slot, $page), $this);
         }
 
         $output .= html_writer::start_tag('div', array('class' => 'submitbtns'));
@@ -486,7 +499,7 @@ class mod_quiz_renderer extends plugin_renderer_base {
         // if you navigate before the form has finished loading, it does not wipe all
         // the student's answers.
         $output .= html_writer::empty_tag('input', array('type' => 'hidden', 'name' => 'slots',
-                'value' => implode(',', $slots)));
+                'value' => implode(',', $attemptobj->get_active_slots($page))));
 
         // Finish the form.
         $output .= html_writer::end_tag('div');
@@ -495,6 +508,22 @@ class mod_quiz_renderer extends plugin_renderer_base {
         $output .= $this->connection_warning();
 
         return $output;
+    }
+
+    /**
+     * Render a button which allows students to redo a question in the attempt.
+     *
+     * @param int $slot the number of the slot to generate the button for.
+     * @param bool $disabled if true, output the button disabled.
+     * @return string HTML fragment.
+     */
+    public function redo_question_button($slot, $disabled) {
+        $attributes = array('type' => 'submit',  'name' => 'redoslot' . $slot,
+                'value' => get_string('redoquestion', 'quiz'), 'class' => 'mod_quiz-redo_question_button');
+        if ($disabled) {
+            $attributes['disabled'] = 'disabled';
+        }
+        return html_writer::div(html_writer::empty_tag('input', $attributes));
     }
 
     /**
@@ -589,14 +618,27 @@ class mod_quiz_renderer extends plugin_renderer_base {
             $table->align[] = 'left';
             $table->size[] = '';
         }
+        $tablewidth = count($table->align);
         $table->data = array();
 
         // Get the summary info for each question.
         $slots = $attemptobj->get_slots();
         foreach ($slots as $slot) {
+            // Add a section headings if we need one here.
+            $heading = $attemptobj->get_heading_before_slot($slot);
+            if ($heading) {
+                $cell = new html_table_cell(format_string($heading));
+                $cell->header = true;
+                $cell->colspan = $tablewidth;
+                $table->data[] = array($cell);
+            }
+
+            // Don't display information items.
             if (!$attemptobj->is_real_question($slot)) {
                 continue;
             }
+
+            // Real question, show it.
             $flag = '';
             if ($attemptobj->is_question_flagged($slot)) {
                 $flag = html_writer::empty_tag('img', array('src' => $this->pix_url('i/flagged'),
@@ -808,8 +850,8 @@ class mod_quiz_renderer extends plugin_renderer_base {
         $output .= $this->view_information($quiz, $cm, $context, $messages);
         $guestno = html_writer::tag('p', get_string('guestsno', 'quiz'));
         $liketologin = html_writer::tag('p', get_string('liketologin'));
-        $output .= $this->confirm($guestno."\n\n".$liketologin."\n", get_login_url(),
-                get_referer(false));
+        $referer = clean_param(get_referer(false), PARAM_LOCALURL);
+        $output .= $this->confirm($guestno."\n\n".$liketologin."\n", get_login_url(), $referer);
         return $output;
     }
 
@@ -1174,137 +1216,21 @@ class mod_quiz_renderer extends plugin_renderer_base {
         $options = array('filter' => false, 'newlines' => false);
         $warning = format_text(get_string('connectionerror', 'quiz'), FORMAT_MARKDOWN, $options);
         $ok = format_text(get_string('connectionok', 'quiz'), FORMAT_MARKDOWN, $options);
-        return html_writer::tag('div', $warning, array('id' => 'connection-error', 'style' => 'display: none;', 'role' => 'alert')) .
-                html_writer::tag('div', $ok, array('id' => 'connection-ok', 'style' => 'display: none;', 'role' => 'alert'));
+        return html_writer::tag('div', $warning,
+                    array('id' => 'connection-error', 'style' => 'display: none;', 'role' => 'alert')) .
+                    html_writer::tag('div', $ok, array('id' => 'connection-ok', 'style' => 'display: none;', 'role' => 'alert'));
     }
-    
-    
-/*==========================Started by Niranjan for dispaly assigned users table and delete action==========*/   
-    public function assign_quizusers($id){
-		        global $CFG, $OUTPUT, $DB, $USER,$PAGE;
-
-		require_once($CFG->dirroot.'/mod/quiz/lib.php');
-
-		
-$sql ="SELECT ou.id,u.id as userid,u.firstname,u.lastname,u.email,ou.supervisorid,q.grade,q.id as quizid from {local_onlinetest_users} ou JOIN {quiz} q ON ou.onlinetest=q.id JOIN {user} u ON ou.userid=u.id where ou.onlinetest={$id} order by q.id DESC"; 
-        $assigned_users= $DB->get_records_sql($sql);
-        $out='';
-        $data=array();
-         if(!empty($assigned_users)){
-             //$out.='<p><label id="course_label"><input type="checkbox" id="checkAll"/> Check all</label></p>';
-            foreach($assigned_users as $assigned_user){
-                $row=array();
-                $user=$DB->get_record_sql("SELECT * FROM {user} WHERE id=$assigned_user->userid");
-                
-                if($user){
-                       
-                   $user_data=$DB->get_record_sql("SELECT * FROM {local_userdata} WHERE id={$assigned_user->userid}");
-                   $row[]=$user->firstname.' '.$user->lastname;
-                   $row[]=$user->email;
-                   $row[]=$user->idnumber;
-                   if($assigned_user->supervisorid!=''){
-                     $supervisor=$DB->get_record_sql("SELECT * FROM {user} WHERE id={$assigned_user->supervisorid}");
-					 if($supervisor)
-                          $row[]=$supervisor->firstname.' .'.$supervisor->lastname;
-				      else 
-						  $row[]="N/A";
-                   }else{
-                       $supervisor='';
-                       $row[]='Not assigned supervisor';
-                   }
-				   
-				   $sql="SELECT * FROM {quiz_attempts} where id=(SELECT max(id) id from {quiz_attempts} where userid={$assigned_user->userid} and quiz={$assigned_user->quizid})";
-          $attemptdate=$DB->get_record_sql($sql);
-         
-        if(empty($attemptdate) || ($attemptdate->timestart==0 && $attemptdate->timefinish==0))
-            $row[]='Not Yet Started';
-        else if($attemptdate->timestart!=0 && $attemptdate->timefinish==0)
-             $row[] = date('d M, Y', $attemptdate->timestart). ' /  Not Completed';
-        else
-             $row[] = date('d M, Y', $attemptdate->timestart).  '  / ' .date('d M, Y', $attemptdate->timefinish);
-		 
-		 
-					   $attempts=quiz_get_user_attempts($assigned_user->quizid, $assigned_user->userid, 'finished', true);
-					   $row[]=count($attempts);
-$finalgrade=get_employeescore($assigned_user->quizid,1,$assigned_user->userid);
-//$row[]=round($assigned_user->grade,2);
-					   $row[]=$finalgrade;
-					   
-                   $sql="SELECT max(id) as id FROM {quiz_attempts} where userid={$assigned_user->userid} and quiz={$id} ";
-      
-                   $review=$DB->get_field_sql($sql);
-           
-                   $link = html_writer::link( $CFG->wwwroot.'/mod/quiz/review.php?attempt='.$review, get_string('review', 'quiz'), array('title' => get_string('review', 'quiz')));
-                     if($review)
-                   $row[]=$link;
-                     else 
-                         $row[]='Not Attempted';
-                 
-               }
-                $data[]=$row;
-            }
-          
-         }
-        $table = new html_table();
-        $head=array('User Name','Email Id','Employee Id','Supervisor','Last Attempted Date','Attempts','Score','Review');
-        $table->head = $head;
-        $table->width = '100%';
-        $table->id ='assigned_users_view'.$id.'';
-        $table->align = array('left','left','left','left','center','center');
-        $table->data  = $data;
-        if(!empty($data)){
-        $out.= html_writer::table($table);
-		  $out.=html_writer::script('$(document).ready(function() {
-                         $("#assigned_users_view'.$id.'").DataTable(
-                         {
-                            scrollY:"50vh",
-                            scrollCollapse: true,
-                            paging:false
-        
-                      });
-                      
-                      $("#checkAll'.$id.'").change(function () {
-                      $("input:checkbox").prop("checked", $(this).prop("checked"));
-                  
-                    });
-                });');
-          
-        }else{
-        $out.="<div id=emptymsg>No users are assigned to this test.</div>";  
-        }
-        return $out;
-    }
-   
- 
-
-function get_quizeslist($quizid) {
-    global $CFG,$DB;
-
-    $fromclause = "FROM {quiz} s";
-    $locationwhere = '';
-    $locationparams = array();
-    
-    $sessions = $DB->get_records("quiz",array('id'=>$quizid));
-
-    if ($sessions) {
-        foreach ($sessions as $key => $value) {
-         
-        }
-    }
-    return $sessions; 
-
-}    
-
-
-
 }
+
 
 class mod_quiz_links_to_other_attempts implements renderable {
     /**
      * @var array string attempt number => url, or null for the current attempt.
+     * url may be either a moodle_url, or a renderable.
      */
     public $links = array();
 }
+
 
 class mod_quiz_view_object {
     /** @var array $infomessages of messages with information to display about the quiz. */
