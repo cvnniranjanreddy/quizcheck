@@ -1818,4 +1818,3 @@ function quiz_get_navigation_options() {
         QUIZ_NAVMETHOD_SEQ  => get_string('navmethod_seq', 'quiz')
     );
 }
-
